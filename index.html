@@ -62,7 +62,7 @@
   // ═══════════════════════════════════════════════════════════════
   const CONFIG = {
     TOWER_HEIGHT:    18,
-    CAMERA_HEIGHT:   20,
+    CAMERA_HEIGHT:   19.8,  // eye level just at parapet height — peer over battlements
     GROUND_RADIUS:   100,
     FOG_DENSITY:     0.013,
     GAZE_ANGLE_DEG:  10,
@@ -145,27 +145,41 @@
 
   function startAmbience() {
     if (!audioCtx) return;
-    // Wind drone — two detuned oscillators through lowpass
-    const g = audioCtx.createGain();
-    g.gain.value = 0.06;
-    g.connect(audioCtx.destination);
-    const lp = audioCtx.createBiquadFilter();
-    lp.type = 'lowpass'; lp.frequency.value = 400; lp.Q.value = 1;
-    lp.connect(g);
+    // Gentle wind — very soft filtered noise + subtle sine pad
+    const master = audioCtx.createGain();
+    master.gain.value = 0.035;
+    master.connect(audioCtx.destination);
+
+    // Wind: filtered noise (gentle breeze, not harsh)
+    const bufSize = audioCtx.sampleRate * 4;
+    const noiseBuf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) nd[i] = (Math.random() * 2 - 1);
+    const noiseSrc = audioCtx.createBufferSource();
+    noiseSrc.buffer = noiseBuf; noiseSrc.loop = true;
+    const windLP = audioCtx.createBiquadFilter();
+    windLP.type = 'lowpass'; windLP.frequency.value = 250; windLP.Q.value = 0.5;
+    const windGain = audioCtx.createGain();
+    windGain.gain.value = 0.5;
+    noiseSrc.connect(windLP); windLP.connect(windGain); windGain.connect(master);
+    noiseSrc.start();
+    // LFO on wind filter for natural gusting
+    const windLFO = audioCtx.createOscillator();
+    windLFO.frequency.value = 0.08;
+    const windLFOGain = audioCtx.createGain();
+    windLFOGain.gain.value = 80;
+    windLFO.connect(windLFOGain); windLFOGain.connect(windLP.frequency);
+    windLFO.start();
+
+    // Subtle drone pad — two soft sines an octave apart
     for (let i = 0; i < 2; i++) {
       const osc = audioCtx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = 55 + i * 3;
-      osc.connect(lp);
+      osc.type = 'sine';
+      osc.frequency.value = i === 0 ? 65 : 130;
+      const padGain = audioCtx.createGain();
+      padGain.gain.value = 0.15;
+      osc.connect(padGain); padGain.connect(master);
       osc.start();
-      // Slow LFO on frequency for organic feel
-      const lfo = audioCtx.createOscillator();
-      lfo.frequency.value = 0.15 + i * 0.08;
-      const lfoGain = audioCtx.createGain();
-      lfoGain.gain.value = 5;
-      lfo.connect(lfoGain);
-      lfoGain.connect(osc.frequency);
-      lfo.start();
     }
   }
 
@@ -175,117 +189,107 @@
     const now = audioCtx.currentTime;
     switch(type) {
       case 'bowDraw': {
-        // Rising filtered noise
-        const bufSize = audioCtx.sampleRate * 0.8;
-        const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
-        const data = buf.getChannelData(0);
-        for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
-        const src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        const bp = audioCtx.createBiquadFilter();
-        bp.type = 'bandpass'; bp.frequency.value = 300; bp.Q.value = 3;
-        bp.frequency.linearRampToValueAtTime(1200, now + 0.8);
+        // Gentle rising tension — soft filtered sine sweep
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.linearRampToValueAtTime(420, now + 0.9);
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 600; lp.Q.value = 1;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, now);
-        g.gain.linearRampToValueAtTime(0.15 * v, now + 0.6);
-        g.gain.linearRampToValueAtTime(0, now + 0.8);
-        src.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
-        src.start(now); src.stop(now + 0.8);
+        g.gain.linearRampToValueAtTime(0.07 * v, now + 0.5);
+        g.gain.linearRampToValueAtTime(0.09 * v, now + 0.8);
+        g.gain.linearRampToValueAtTime(0, now + 0.95);
+        osc.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 1.0);
         break;
       }
       case 'bowRelease': {
-        // Sharp twang — sine sweep + noise burst
+        // Satisfying twang — soft triangle + gentle thump
         const osc = audioCtx.createOscillator();
         osc.type = 'triangle';
-        osc.frequency.setValueAtTime(800, now);
-        osc.frequency.exponentialRampToValueAtTime(120, now + 0.15);
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(90, now + 0.2);
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 800; lp.Q.value = 0.7;
         const g = audioCtx.createGain();
-        g.gain.setValueAtTime(0.25 * v, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-        osc.connect(g); g.connect(audioCtx.destination);
-        osc.start(now); osc.stop(now + 0.2);
-        // Noise burst
-        const bLen = audioCtx.sampleRate * 0.05;
-        const buf = audioCtx.createBuffer(1, bLen, audioCtx.sampleRate);
-        const d = buf.getChannelData(0);
-        for (let i = 0; i < bLen; i++) d[i] = (Math.random() * 2 - 1);
-        const ns = audioCtx.createBufferSource();
-        ns.buffer = buf;
-        const ng = audioCtx.createGain();
-        ng.gain.setValueAtTime(0.12 * v, now);
-        ng.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-        ns.connect(ng); ng.connect(audioCtx.destination);
-        ns.start(now); ns.stop(now + 0.05);
+        g.gain.setValueAtTime(0.14 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+        osc.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.25);
         break;
       }
       case 'arrowHit': {
-        // Low thud
+        // Solid thud — low sine + quiet noise
         const osc = audioCtx.createOscillator();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(90, now);
-        osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+        osc.frequency.setValueAtTime(80, now);
+        osc.frequency.exponentialRampToValueAtTime(35, now + 0.12);
         const g = audioCtx.createGain();
-        g.gain.setValueAtTime(0.3 * v, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        g.gain.setValueAtTime(0.18 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
         osc.connect(g); g.connect(audioCtx.destination);
-        osc.start(now); osc.stop(now + 0.2);
+        osc.start(now); osc.stop(now + 0.18);
         break;
       }
       case 'enemyDeath': {
-        // Descending tone
+        // Soft descending chime — triangle wave, gentle
         const osc = audioCtx.createOscillator();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(400, now);
-        osc.frequency.exponentialRampToValueAtTime(80, now + 0.3);
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(350, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.25);
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 500; lp.Q.value = 0.5;
         const g = audioCtx.createGain();
-        g.gain.setValueAtTime(0.12 * v, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-        osc.connect(g); g.connect(audioCtx.destination);
-        osc.start(now); osc.stop(now + 0.35);
+        g.gain.setValueAtTime(0.08 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.3);
         break;
       }
       case 'towerDamage': {
-        // Deep rumble
+        // Deep rumble — filtered sine, not harsh
         const osc = audioCtx.createOscillator();
-        osc.type = 'sawtooth';
-        osc.frequency.value = 40;
+        osc.type = 'sine';
+        osc.frequency.value = 45;
         const lp = audioCtx.createBiquadFilter();
-        lp.type = 'lowpass'; lp.frequency.value = 100;
+        lp.type = 'lowpass'; lp.frequency.value = 80;
         const g = audioCtx.createGain();
-        g.gain.setValueAtTime(0.35 * v, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        g.gain.setValueAtTime(0.2 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
         osc.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
-        osc.start(now); osc.stop(now + 0.6);
+        osc.start(now); osc.stop(now + 0.5);
         break;
       }
       case 'waveHorn': {
-        // War horn — sawtooth through bandpass, swelling
+        // War horn — triangle through soft bandpass, gentle swell
         const osc = audioCtx.createOscillator();
-        osc.type = 'sawtooth';
+        osc.type = 'triangle';
         osc.frequency.value = 110;
         const bp = audioCtx.createBiquadFilter();
-        bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 5;
+        bp.type = 'bandpass'; bp.frequency.value = 200; bp.Q.value = 2;
         const g = audioCtx.createGain();
         g.gain.setValueAtTime(0, now);
-        g.gain.linearRampToValueAtTime(0.2 * v, now + 0.3);
-        g.gain.setValueAtTime(0.2 * v, now + 0.8);
+        g.gain.linearRampToValueAtTime(0.12 * v, now + 0.4);
+        g.gain.setValueAtTime(0.12 * v, now + 0.9);
         g.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
         osc.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
         osc.start(now); osc.stop(now + 1.5);
         break;
       }
       case 'bossHorn': {
-        // Boss horn — deeper, more aggressive
-        for (let i = 0; i < 3; i++) {
+        // Boss horn — deeper, richer but not harsh
+        for (let i = 0; i < 2; i++) {
           const osc = audioCtx.createOscillator();
-          osc.type = 'sawtooth';
-          osc.frequency.value = 55 + i * 7;
+          osc.type = 'triangle';
+          osc.frequency.value = 55 + i * 55;
           const bp = audioCtx.createBiquadFilter();
-          bp.type = 'bandpass'; bp.frequency.value = 110; bp.Q.value = 3;
+          bp.type = 'bandpass'; bp.frequency.value = 110; bp.Q.value = 1.5;
           const g = audioCtx.createGain();
           g.gain.setValueAtTime(0, now);
-          g.gain.linearRampToValueAtTime(0.12 * v, now + 0.4);
-          g.gain.setValueAtTime(0.12 * v, now + 1.2);
+          g.gain.linearRampToValueAtTime(0.08 * v, now + 0.5);
+          g.gain.setValueAtTime(0.08 * v, now + 1.3);
           g.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
           osc.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
           osc.start(now); osc.stop(now + 2.0);
@@ -344,37 +348,35 @@
     const base = BABYLON.MeshBuilder.CreateCylinder("tBase", {height:4, diameterTop:7, diameterBottom:8, tessellation:8}, sc);
     base.position.y = 2; base.material = darkStone; base.parent = parent;
 
-    // Main shaft
-    const shaft = BABYLON.MeshBuilder.CreateCylinder("tShaft", {height:13, diameterTop:6, diameterBottom:7, tessellation:8}, sc);
+    // Main shaft — narrower so it doesn't block the downward view
+    const shaft = BABYLON.MeshBuilder.CreateCylinder("tShaft", {height:13, diameterTop:5, diameterBottom:6.5, tessellation:8}, sc);
     shaft.position.y = 10.5; shaft.material = stoneMat; shaft.parent = parent;
 
-    // Top platform (wider)
-    const platform = BABYLON.MeshBuilder.CreateCylinder("tPlat", {height:1.5, diameterTop:8, diameterBottom:6, tessellation:8}, sc);
-    platform.position.y = 17.75; platform.material = stoneMat; platform.parent = parent;
+    // Top platform — thin ring (open center so player can look straight down!)
+    const platform = BABYLON.MeshBuilder.CreateTorus("tPlat", {diameter:7, thickness:1.2, tessellation:8}, sc);
+    platform.position.y = 18.2; platform.material = stoneMat; platform.parent = parent;
 
-    // Floor disc on top
-    const floor = BABYLON.MeshBuilder.CreateCylinder("tFloor", {height:0.3, diameter:7.5, tessellation:8}, sc);
-    floor.position.y = 18.65; floor.material = darkStone; floor.parent = parent;
+    // NO solid floor — the center is open so the player looks straight down at the ground
 
-    // Battlements (crenellations)
-    for (let i = 0; i < 10; i++) {
-      const angle = (i / 10) * Math.PI * 2;
-      const merlon = BABYLON.MeshBuilder.CreateBox("merlon"+i, {width:1.2, height:1.4, depth:0.7}, sc);
-      merlon.position.x = Math.cos(angle) * 3.6;
-      merlon.position.z = Math.sin(angle) * 3.6;
-      merlon.position.y = 19.5;
+    // Battlements (crenellations) — smaller ring, only 6 to leave gaps between them
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const merlon = BABYLON.MeshBuilder.CreateBox("merlon"+i, {width:1.0, height:1.2, depth:0.5}, sc);
+      merlon.position.x = Math.cos(angle) * 3.3;
+      merlon.position.z = Math.sin(angle) * 3.3;
+      merlon.position.y = 19.3;
       merlon.rotation.y = -angle;
       merlon.material = stoneMat;
       merlon.parent = parent;
     }
 
-    // Wooden support beams
+    // Wooden support beams — on the outside of the shaft
     for (let i = 0; i < 4; i++) {
       const angle = (i / 4) * Math.PI * 2 + Math.PI / 8;
-      const beam = BABYLON.MeshBuilder.CreateBox("beam"+i, {width:0.25, height:3, depth:0.25}, sc);
-      beam.position.x = Math.cos(angle) * 3.2;
-      beam.position.z = Math.sin(angle) * 3.2;
-      beam.position.y = 16;
+      const beam = BABYLON.MeshBuilder.CreateBox("beam"+i, {width:0.2, height:2.5, depth:0.2}, sc);
+      beam.position.x = Math.cos(angle) * 2.8;
+      beam.position.z = Math.sin(angle) * 2.8;
+      beam.position.y = 16.5;
       beam.material = woodMat;
       beam.parent = parent;
     }
@@ -391,12 +393,12 @@
     const flag = BABYLON.MeshBuilder.CreatePlane("flag", {width:1.8, height:1.0}, sc);
     flag.position.set(0.9, 23.5, 0); flag.material = flagMat; flag.parent = parent;
 
-    // Torch mounts (4 around the platform)
+    // Torch mounts (4 around the parapet edge)
     const torchPositions = [];
     for (let i = 0; i < 4; i++) {
       const angle = (i / 4) * Math.PI * 2;
-      const tx = Math.cos(angle) * 3.8;
-      const tz = Math.sin(angle) * 3.8;
+      const tx = Math.cos(angle) * 3.4;
+      const tz = Math.sin(angle) * 3.4;
       const torchPole = BABYLON.MeshBuilder.CreateCylinder("tp"+i, {height:1.5, diameter:0.1}, sc);
       torchPole.position.set(tx, 19.5, tz); torchPole.material = woodMat; torchPole.parent = parent;
       const cup = BABYLON.MeshBuilder.CreateCylinder("tc"+i, {height:0.3, diameterTop:0.3, diameterBottom:0.15}, sc);
@@ -1666,9 +1668,9 @@
       doNotHandleContextLost: true,
     });
 
-    // Reduce resolution on mobile
-    if (window.devicePixelRatio > 1) {
-      engine.setHardwareScalingLevel(2);
+    // iPhone 15 Pro handles full res fine; only scale on older devices
+    if (window.devicePixelRatio > 2) {
+      engine.setHardwareScalingLevel(window.devicePixelRatio * 0.75);
     }
 
     scene = new BABYLON.Scene(engine);
@@ -1679,8 +1681,9 @@
     scene.blockMaterialDirtyMechanism = true;
 
     // ── VR Camera at tower top ──
+    // Position at the EDGE of the parapet, not center — so looking down shows the ground below
     camera = new BABYLON.VRDeviceOrientationFreeCamera("vrCam",
-      new BABYLON.Vector3(0, CONFIG.CAMERA_HEIGHT, 0), scene);
+      new BABYLON.Vector3(0, CONFIG.CAMERA_HEIGHT, -2.8), scene);
     camera.interaxialDistance = 0.064;
     camera.keysUp = []; camera.keysDown = [];
     camera.keysLeft = []; camera.keysRight = [];
