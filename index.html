@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tower Defense VR</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{width:100%;height:100%;overflow:hidden;background:#1a0f08;font-family:'Georgia','Times New Roman',serif}
+    #renderCanvas{width:100%;height:100%;touch-action:none;display:block}
+    #overlay{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:10}
+    #startScreen{text-align:center;color:#d4a017;padding:40px;max-width:420px}
+    #startScreen h1{font-size:2.4em;margin-bottom:4px;text-shadow:0 0 30px rgba(212,160,23,0.5);letter-spacing:3px}
+    #startScreen .subtitle{font-size:1em;color:#a08040;margin-bottom:30px;font-style:italic}
+    #startScreen .instructions{font-size:0.85em;color:#887755;line-height:1.6;margin-bottom:30px;text-align:left;padding:0 10px}
+    #startScreen .instructions span{color:#d4a017}
+    #startBtn{background:linear-gradient(135deg,#8B6914,#d4a017);color:#1a0f08;border:2px solid #d4a017;padding:18px 50px;font-size:1.2em;font-family:inherit;font-weight:bold;letter-spacing:2px;cursor:pointer;border-radius:4px;text-transform:uppercase;transition:all 0.3s}
+    #startBtn:active{transform:scale(0.96);background:#d4a017}
+    #gameOverScreen{display:none;text-align:center;color:#d4a017;padding:40px;max-width:420px}
+    #gameOverScreen h1{font-size:2.2em;margin-bottom:10px;text-shadow:0 0 30px rgba(200,40,40,0.5);color:#cc4444}
+    #gameOverScreen .stats{font-size:0.95em;color:#a08040;line-height:2;margin:20px 0}
+    #gameOverScreen .stats span{color:#d4a017;font-weight:bold}
+    #restartBtn{background:linear-gradient(135deg,#8B6914,#d4a017);color:#1a0f08;border:2px solid #d4a017;padding:15px 40px;font-size:1.1em;font-family:inherit;font-weight:bold;letter-spacing:2px;cursor:pointer;border-radius:4px;text-transform:uppercase}
+    #loadBar{width:200px;height:4px;background:#332211;border-radius:2px;margin:20px auto 0;overflow:hidden}
+    #loadFill{width:0%;height:100%;background:linear-gradient(90deg,#8B6914,#d4a017);transition:width 0.3s}
+    .swords{font-size:1.5em;display:block;margin-bottom:8px;color:#a08040}
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+  <div id="overlay">
+    <div id="startScreen">
+      <span class="swords">&#9876; &#9876;</span>
+      <h1>TOWER DEFENSE</h1>
+      <div class="subtitle">A Medieval VR Experience</div>
+      <div class="instructions">
+        <span>GAZE</span> at enemies to charge your bow<br>
+        <span>HOLD</span> your gaze to draw the bowstring<br>
+        <span>ARROWS</span> fire automatically when charged<br><br>
+        Defend the tower from waves of invaders<br>
+        approaching from three directions below
+      </div>
+      <button id="startBtn">DEFEND THE REALM</button>
+      <div id="loadBar"><div id="loadFill"></div></div>
+    </div>
+    <div id="gameOverScreen">
+      <h1>THE TOWER HAS FALLEN</h1>
+      <div class="stats" id="statsText"></div>
+      <button id="restartBtn">DEFEND AGAIN</button>
+    </div>
+  </div>
+  <script>
+(function() {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════════════════
+  //  CONFIGURATION
+  // ═══════════════════════════════════════════════════════════════
+  const CONFIG = {
+    TOWER_HEIGHT:    18,
+    CAMERA_HEIGHT:   20,
+    GROUND_RADIUS:   100,
+    FOG_DENSITY:     0.013,
+    GAZE_ANGLE_DEG:  10,
+    DWELL_BASE:      1.2,
+    ARROW_SPEED:     45,
+    ARROW_ARC:       4,
+    TOWER_MAX_HP:    100,
+    WAVE_BREAK:      8,
+    SPAWN_INTERVAL:  1.8,
+    POWERUP_INTERVAL:35,
+    POWERUP_DURATION:12,
+    MAX_ENEMIES:     15,
+    MAX_ARROWS:      5,
+    COMBO_WINDOW:    3.0,
+  };
+
+  const ENEMY = {
+    SOLDIER: { name:'Soldier', hp:1, speed:3.5, damage:8,  score:10,  height:1.8, radius:0.5,  color:[0.75,0.18,0.12], dwellTime:1.2, unlockWave:1 },
+    GOBLIN:  { name:'Goblin',  hp:1, speed:5.5, damage:5,  score:15,  height:1.2, radius:0.4,  color:[0.15,0.65,0.15], dwellTime:1.5, unlockWave:2 },
+    KNIGHT:  { name:'Knight',  hp:3, speed:2.2, damage:15, score:30,  height:2.0, radius:0.6,  color:[0.18,0.25,0.75], dwellTime:0.8, unlockWave:3 },
+    TROLL:   { name:'Troll',   hp:8, speed:1.4, damage:30, score:100, height:3.5, radius:1.2,  color:[0.50,0.38,0.12], dwellTime:0.6, unlockWave:5, isBoss:true },
+  };
+
+  const PATHS = [
+    // NORTH
+    [{x:0,z:-85},{x:6,z:-68},{x:-4,z:-52},{x:3,z:-38},{x:-6,z:-22},{x:1,z:-8},{x:0,z:-3.5}],
+    // EAST
+    [{x:85,z:12},{x:68,z:8},{x:52,z:16},{x:38,z:6},{x:22,z:10},{x:8,z:2},{x:3.5,z:0}],
+    // SOUTHWEST
+    [{x:-60,z:75},{x:-50,z:58},{x:-42,z:44},{x:-32,z:32},{x:-20,z:20},{x:-8,z:6},{x:-2.5,z:2.5}],
+  ];
+
+  const POWERUP_TYPES = ['FIRE','ICE','MULTI','RAPID'];
+
+  // ═══════════════════════════════════════════════════════════════
+  //  STATE
+  // ═══════════════════════════════════════════════════════════════
+  const STATE = {
+    phase: 'START',
+    wave: 0,
+    towerHP: CONFIG.TOWER_MAX_HP,
+    score: 0,
+    combo: 0,
+    maxCombo: 0,
+    comboTimer: 0,
+    enemiesKilled: 0,
+    enemies: [],
+    arrows: [],
+    powerUps: [],
+    gazeTarget: null,
+    gazeCharge: 0,
+    activePowerUp: null,
+    powerUpTimer: 0,
+    waveQueue: [],
+    spawnTimer: 0,
+    waveBreakTimer: 0,
+    powerUpSpawnTimer: CONFIG.POWERUP_INTERVAL,
+    announcementTimer: 0,
+    towerDamageFlash: 0,
+    dt: 0,
+    highScore: parseInt(localStorage.getItem('towerDefVR_hs') || '0'),
+  };
+
+  let engine, scene, camera, glowLayer;
+  let reticleRing, reticleFill, reticleNode;
+  let hudTexture, hudPlane;
+  let audioCtx, audioStarted = false;
+  let torchLights = [];
+  let announceNode, announceTexture, announcePlane;
+
+  // ═══════════════════════════════════════════════════════════════
+  //  AUDIO — Procedural Medieval Sounds
+  // ═══════════════════════════════════════════════════════════════
+  function initAudio() {
+    if (audioStarted) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioStarted = true;
+    startAmbience();
+  }
+
+  function startAmbience() {
+    if (!audioCtx) return;
+    // Wind drone — two detuned oscillators through lowpass
+    const g = audioCtx.createGain();
+    g.gain.value = 0.06;
+    g.connect(audioCtx.destination);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 400; lp.Q.value = 1;
+    lp.connect(g);
+    for (let i = 0; i < 2; i++) {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 55 + i * 3;
+      osc.connect(lp);
+      osc.start();
+      // Slow LFO on frequency for organic feel
+      const lfo = audioCtx.createOscillator();
+      lfo.frequency.value = 0.15 + i * 0.08;
+      const lfoGain = audioCtx.createGain();
+      lfoGain.gain.value = 5;
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+      lfo.start();
+    }
+  }
+
+  function playSound(type, vol) {
+    if (!audioCtx) return;
+    const v = vol || 1;
+    const now = audioCtx.currentTime;
+    switch(type) {
+      case 'bowDraw': {
+        // Rising filtered noise
+        const bufSize = audioCtx.sampleRate * 0.8;
+        const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        const bp = audioCtx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = 300; bp.Q.value = 3;
+        bp.frequency.linearRampToValueAtTime(1200, now + 0.8);
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, now);
+        g.gain.linearRampToValueAtTime(0.15 * v, now + 0.6);
+        g.gain.linearRampToValueAtTime(0, now + 0.8);
+        src.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
+        src.start(now); src.stop(now + 0.8);
+        break;
+      }
+      case 'bowRelease': {
+        // Sharp twang — sine sweep + noise burst
+        const osc = audioCtx.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(120, now + 0.15);
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.25 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.2);
+        // Noise burst
+        const bLen = audioCtx.sampleRate * 0.05;
+        const buf = audioCtx.createBuffer(1, bLen, audioCtx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < bLen; i++) d[i] = (Math.random() * 2 - 1);
+        const ns = audioCtx.createBufferSource();
+        ns.buffer = buf;
+        const ng = audioCtx.createGain();
+        ng.gain.setValueAtTime(0.12 * v, now);
+        ng.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+        ns.connect(ng); ng.connect(audioCtx.destination);
+        ns.start(now); ns.stop(now + 0.05);
+        break;
+      }
+      case 'arrowHit': {
+        // Low thud
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(90, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.3 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.2);
+        break;
+      }
+      case 'enemyDeath': {
+        // Descending tone
+        const osc = audioCtx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(80, now + 0.3);
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.12 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.35);
+        break;
+      }
+      case 'towerDamage': {
+        // Deep rumble
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.value = 40;
+        const lp = audioCtx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 100;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.35 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        osc.connect(lp); lp.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.6);
+        break;
+      }
+      case 'waveHorn': {
+        // War horn — sawtooth through bandpass, swelling
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.value = 110;
+        const bp = audioCtx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 5;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, now);
+        g.gain.linearRampToValueAtTime(0.2 * v, now + 0.3);
+        g.gain.setValueAtTime(0.2 * v, now + 0.8);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
+        osc.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 1.5);
+        break;
+      }
+      case 'bossHorn': {
+        // Boss horn — deeper, more aggressive
+        for (let i = 0; i < 3; i++) {
+          const osc = audioCtx.createOscillator();
+          osc.type = 'sawtooth';
+          osc.frequency.value = 55 + i * 7;
+          const bp = audioCtx.createBiquadFilter();
+          bp.type = 'bandpass'; bp.frequency.value = 110; bp.Q.value = 3;
+          const g = audioCtx.createGain();
+          g.gain.setValueAtTime(0, now);
+          g.gain.linearRampToValueAtTime(0.12 * v, now + 0.4);
+          g.gain.setValueAtTime(0.12 * v, now + 1.2);
+          g.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+          osc.connect(bp); bp.connect(g); g.connect(audioCtx.destination);
+          osc.start(now); osc.stop(now + 2.0);
+        }
+        break;
+      }
+      case 'powerUp': {
+        // Ascending sparkle
+        for (let i = 0; i < 4; i++) {
+          const osc = audioCtx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.value = 400 + i * 200;
+          const g = audioCtx.createGain();
+          const t = now + i * 0.08;
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(0.1 * v, t + 0.03);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.connect(g); g.connect(audioCtx.destination);
+          osc.start(t); osc.stop(t + 0.15);
+        }
+        break;
+      }
+      case 'combo': {
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = 600 + STATE.combo * 50;
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0.08 * v, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.12);
+        break;
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  PROCEDURAL MESH BUILDERS
+  // ═══════════════════════════════════════════════════════════════
+  function buildTower(sc) {
+    const stoneMat = new BABYLON.StandardMaterial("stone", sc);
+    stoneMat.diffuseColor = new BABYLON.Color3(0.55, 0.52, 0.47);
+    stoneMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+
+    const darkStone = new BABYLON.StandardMaterial("darkStone", sc);
+    darkStone.diffuseColor = new BABYLON.Color3(0.45, 0.42, 0.38);
+    darkStone.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+
+    const woodMat = new BABYLON.StandardMaterial("wood", sc);
+    woodMat.diffuseColor = new BABYLON.Color3(0.42, 0.26, 0.14);
+    woodMat.specularColor = BABYLON.Color3.Black();
+
+    const parent = new BABYLON.TransformNode("tower", sc);
+
+    // Foundation
+    const base = BABYLON.MeshBuilder.CreateCylinder("tBase", {height:4, diameterTop:7, diameterBottom:8, tessellation:8}, sc);
+    base.position.y = 2; base.material = darkStone; base.parent = parent;
+
+    // Main shaft
+    const shaft = BABYLON.MeshBuilder.CreateCylinder("tShaft", {height:13, diameterTop:6, diameterBottom:7, tessellation:8}, sc);
+    shaft.position.y = 10.5; shaft.material = stoneMat; shaft.parent = parent;
+
+    // Top platform (wider)
+    const platform = BABYLON.MeshBuilder.CreateCylinder("tPlat", {height:1.5, diameterTop:8, diameterBottom:6, tessellation:8}, sc);
+    platform.position.y = 17.75; platform.material = stoneMat; platform.parent = parent;
+
+    // Floor disc on top
+    const floor = BABYLON.MeshBuilder.CreateCylinder("tFloor", {height:0.3, diameter:7.5, tessellation:8}, sc);
+    floor.position.y = 18.65; floor.material = darkStone; floor.parent = parent;
+
+    // Battlements (crenellations)
+    for (let i = 0; i < 10; i++) {
+      const angle = (i / 10) * Math.PI * 2;
+      const merlon = BABYLON.MeshBuilder.CreateBox("merlon"+i, {width:1.2, height:1.4, depth:0.7}, sc);
+      merlon.position.x = Math.cos(angle) * 3.6;
+      merlon.position.z = Math.sin(angle) * 3.6;
+      merlon.position.y = 19.5;
+      merlon.rotation.y = -angle;
+      merlon.material = stoneMat;
+      merlon.parent = parent;
+    }
+
+    // Wooden support beams
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2 + Math.PI / 8;
+      const beam = BABYLON.MeshBuilder.CreateBox("beam"+i, {width:0.25, height:3, depth:0.25}, sc);
+      beam.position.x = Math.cos(angle) * 3.2;
+      beam.position.z = Math.sin(angle) * 3.2;
+      beam.position.y = 16;
+      beam.material = woodMat;
+      beam.parent = parent;
+    }
+
+    // Flag pole
+    const pole = BABYLON.MeshBuilder.CreateCylinder("pole", {height:5, diameter:0.12}, sc);
+    pole.position.y = 22.5; pole.material = woodMat; pole.parent = parent;
+
+    // Flag (two triangles forming a pennant)
+    const flagMat = new BABYLON.StandardMaterial("flag", sc);
+    flagMat.diffuseColor = new BABYLON.Color3(0.75, 0.15, 0.1);
+    flagMat.backFaceCulling = false;
+    flagMat.emissiveColor = new BABYLON.Color3(0.15, 0.02, 0.01);
+    const flag = BABYLON.MeshBuilder.CreatePlane("flag", {width:1.8, height:1.0}, sc);
+    flag.position.set(0.9, 23.5, 0); flag.material = flagMat; flag.parent = parent;
+
+    // Torch mounts (4 around the platform)
+    const torchPositions = [];
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const tx = Math.cos(angle) * 3.8;
+      const tz = Math.sin(angle) * 3.8;
+      const torchPole = BABYLON.MeshBuilder.CreateCylinder("tp"+i, {height:1.5, diameter:0.1}, sc);
+      torchPole.position.set(tx, 19.5, tz); torchPole.material = woodMat; torchPole.parent = parent;
+      const cup = BABYLON.MeshBuilder.CreateCylinder("tc"+i, {height:0.3, diameterTop:0.3, diameterBottom:0.15}, sc);
+      cup.position.set(tx, 20.35, tz); cup.material = woodMat; cup.parent = parent;
+      torchPositions.push(new BABYLON.Vector3(tx, 20.6, tz));
+    }
+
+    // Freeze all tower meshes
+    parent.getChildMeshes().forEach(m => {
+      m.isPickable = false;
+      m.freezeWorldMatrix();
+      if (m.material) m.material.freeze();
+    });
+
+    return { node: parent, torchPositions };
+  }
+
+  function buildTree(sc, type, pos) {
+    const parent = new BABYLON.TransformNode("tree", sc);
+    parent.position = pos;
+
+    const trunkMat = sc.getMaterialByName("trunkMat") || (() => {
+      const m = new BABYLON.StandardMaterial("trunkMat", sc);
+      m.diffuseColor = new BABYLON.Color3(0.38, 0.25, 0.12);
+      m.specularColor = BABYLON.Color3.Black(); m.freeze();
+      return m;
+    })();
+
+    if (type === 0) {
+      // Pine — cone on cylinder
+      const leafMat = sc.getMaterialByName("pineMat") || (() => {
+        const m = new BABYLON.StandardMaterial("pineMat", sc);
+        m.diffuseColor = new BABYLON.Color3(0.15, 0.4, 0.12);
+        m.specularColor = BABYLON.Color3.Black(); m.freeze();
+        return m;
+      })();
+      const trunk = BABYLON.MeshBuilder.CreateCylinder("tr", {height:3, diameterTop:0.3, diameterBottom:0.5}, sc);
+      trunk.position.y = 1.5; trunk.material = trunkMat; trunk.parent = parent;
+      const crown = BABYLON.MeshBuilder.CreateCylinder("cr", {height:4, diameterTop:0, diameterBottom:3, tessellation:6}, sc);
+      crown.position.y = 5; crown.material = leafMat; crown.parent = parent;
+    } else if (type === 1) {
+      // Oak — sphere on cylinder
+      const leafMat = sc.getMaterialByName("oakMat") || (() => {
+        const m = new BABYLON.StandardMaterial("oakMat", sc);
+        m.diffuseColor = new BABYLON.Color3(0.2, 0.5, 0.15);
+        m.specularColor = BABYLON.Color3.Black(); m.freeze();
+        return m;
+      })();
+      const trunk = BABYLON.MeshBuilder.CreateCylinder("tr", {height:2.5, diameterTop:0.4, diameterBottom:0.6}, sc);
+      trunk.position.y = 1.25; trunk.material = trunkMat; trunk.parent = parent;
+      const crown = BABYLON.MeshBuilder.CreateSphere("cr", {diameter:3.5, segments:6}, sc);
+      crown.position.y = 4; crown.material = leafMat; crown.parent = parent;
+    } else {
+      // Birch — slender with small sphere
+      const leafMat = sc.getMaterialByName("birchMat") || (() => {
+        const m = new BABYLON.StandardMaterial("birchMat", sc);
+        m.diffuseColor = new BABYLON.Color3(0.35, 0.6, 0.2);
+        m.specularColor = BABYLON.Color3.Black(); m.freeze();
+        return m;
+      })();
+      const barkMat = sc.getMaterialByName("barkWhite") || (() => {
+        const m = new BABYLON.StandardMaterial("barkWhite", sc);
+        m.diffuseColor = new BABYLON.Color3(0.8, 0.78, 0.72);
+        m.specularColor = BABYLON.Color3.Black(); m.freeze();
+        return m;
+      })();
+      const trunk = BABYLON.MeshBuilder.CreateCylinder("tr", {height:4, diameterTop:0.2, diameterBottom:0.35}, sc);
+      trunk.position.y = 2; trunk.material = barkMat; trunk.parent = parent;
+      const crown = BABYLON.MeshBuilder.CreateSphere("cr", {diameter:2.5, segments:6}, sc);
+      crown.position.y = 5; crown.material = leafMat; crown.parent = parent;
+    }
+
+    const scale = 0.8 + Math.random() * 0.6;
+    parent.scaling.setAll(scale);
+    parent.rotation.y = Math.random() * Math.PI * 2;
+    parent.getChildMeshes().forEach(m => { m.isPickable = false; m.freezeWorldMatrix(); });
+    return parent;
+  }
+
+  function buildWall(sc, from, to) {
+    const wallMat = sc.getMaterialByName("wallMat") || (() => {
+      const m = new BABYLON.StandardMaterial("wallMat", sc);
+      m.diffuseColor = new BABYLON.Color3(0.48, 0.44, 0.38);
+      m.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05); m.freeze();
+      return m;
+    })();
+    const dx = to.x - from.x, dz = to.z - from.z;
+    const length = Math.sqrt(dx*dx + dz*dz);
+    const angle = Math.atan2(dx, dz);
+    const wall = BABYLON.MeshBuilder.CreateBox("wall", {width:length, height:2.5, depth:0.8}, sc);
+    wall.position.x = (from.x + to.x) / 2;
+    wall.position.z = (from.z + to.z) / 2;
+    wall.position.y = 1.25;
+    wall.rotation.y = angle;
+    wall.material = wallMat;
+    wall.isPickable = false;
+    wall.freezeWorldMatrix();
+    return wall;
+  }
+
+  function buildEnemyMesh(sc, typeName) {
+    const cfg = ENEMY[typeName];
+    const mat = new BABYLON.StandardMaterial("emat_"+typeName, sc);
+    mat.diffuseColor = new BABYLON.Color3(cfg.color[0], cfg.color[1], cfg.color[2]);
+    mat.specularColor = new BABYLON.Color3(0.15, 0.15, 0.15);
+    if (cfg.isBoss) {
+      mat.emissiveColor = new BABYLON.Color3(cfg.color[0]*0.15, cfg.color[1]*0.15, cfg.color[2]*0.15);
+    }
+
+    const parent = new BABYLON.TransformNode("enemy_"+typeName, sc);
+
+    // Body — cylinder
+    const body = BABYLON.MeshBuilder.CreateCylinder("ebody", {
+      height: cfg.height * 0.6, diameterTop: cfg.radius * 1.5, diameterBottom: cfg.radius * 1.8, tessellation: 8
+    }, sc);
+    body.position.y = cfg.height * 0.3;
+    body.material = mat; body.parent = parent;
+
+    // Head — sphere
+    const headMat = new BABYLON.StandardMaterial("ehead_"+typeName, sc);
+    headMat.diffuseColor = new BABYLON.Color3(0.75, 0.6, 0.5); // skin tone
+    if (typeName === 'GOBLIN') headMat.diffuseColor = new BABYLON.Color3(0.3, 0.55, 0.25);
+    if (typeName === 'TROLL') headMat.diffuseColor = new BABYLON.Color3(0.45, 0.35, 0.2);
+    headMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+    const head = BABYLON.MeshBuilder.CreateSphere("ehead", {diameter: cfg.radius * 1.2, segments:6}, sc);
+    head.position.y = cfg.height * 0.7;
+    head.material = headMat; head.parent = parent;
+
+    // Weapon for soldiers/knights — thin cylinder
+    if (typeName === 'SOLDIER' || typeName === 'KNIGHT') {
+      const weapMat = new BABYLON.StandardMaterial("weap", sc);
+      weapMat.diffuseColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+      const spear = BABYLON.MeshBuilder.CreateCylinder("spear", {height:cfg.height*0.8, diameter:0.08}, sc);
+      spear.position.set(cfg.radius*0.8, cfg.height*0.4, 0);
+      spear.rotation.z = 0.3;
+      spear.material = weapMat; spear.parent = parent;
+    }
+
+    // Shield for knights
+    if (typeName === 'KNIGHT') {
+      const shieldMat = new BABYLON.StandardMaterial("shield", sc);
+      shieldMat.diffuseColor = new BABYLON.Color3(0.15, 0.2, 0.6);
+      const shield = BABYLON.MeshBuilder.CreateBox("shield", {width:0.6, height:0.8, depth:0.1}, sc);
+      shield.position.set(-cfg.radius*0.7, cfg.height*0.35, 0);
+      shield.material = shieldMat; shield.parent = parent;
+    }
+
+    // Club for trolls
+    if (typeName === 'TROLL') {
+      const clubMat = new BABYLON.StandardMaterial("club", sc);
+      clubMat.diffuseColor = new BABYLON.Color3(0.35, 0.22, 0.1);
+      const club = BABYLON.MeshBuilder.CreateCylinder("club", {height:2.5, diameterTop:0.15, diameterBottom:0.5}, sc);
+      club.position.set(cfg.radius*1.0, cfg.height*0.4, 0);
+      club.rotation.z = 0.4;
+      club.material = clubMat; club.parent = parent;
+    }
+
+    parent.setEnabled(false);
+    return parent;
+  }
+
+  function buildArrowMesh(sc) {
+    const arrowMat = sc.getMaterialByName("arrowMat") || (() => {
+      const m = new BABYLON.StandardMaterial("arrowMat", sc);
+      m.diffuseColor = new BABYLON.Color3(0.45, 0.3, 0.15);
+      m.specularColor = BABYLON.Color3.Black(); m.freeze();
+      return m;
+    })();
+    const tipMat = sc.getMaterialByName("arrowTip") || (() => {
+      const m = new BABYLON.StandardMaterial("arrowTip", sc);
+      m.diffuseColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+      m.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3); m.freeze();
+      return m;
+    })();
+
+    const parent = new BABYLON.TransformNode("arrow", sc);
+    // Shaft
+    const shaft = BABYLON.MeshBuilder.CreateCylinder("ashaft", {height:1.2, diameter:0.06}, sc);
+    shaft.rotation.x = Math.PI / 2;
+    shaft.material = arrowMat; shaft.parent = parent;
+    // Tip
+    const tip = BABYLON.MeshBuilder.CreateCylinder("atip", {height:0.25, diameterTop:0, diameterBottom:0.15, tessellation:4}, sc);
+    tip.rotation.x = Math.PI / 2;
+    tip.position.z = 0.72;
+    tip.material = tipMat; tip.parent = parent;
+    // Fletching
+    const fletchMat = sc.getMaterialByName("fletchMat") || (() => {
+      const m = new BABYLON.StandardMaterial("fletchMat", sc);
+      m.diffuseColor = new BABYLON.Color3(0.7, 0.15, 0.1);
+      m.backFaceCulling = false; m.freeze();
+      return m;
+    })();
+    for (let i = 0; i < 3; i++) {
+      const f = BABYLON.MeshBuilder.CreatePlane("fletch"+i, {width:0.15, height:0.25}, sc);
+      f.position.z = -0.5;
+      f.rotation.y = (i / 3) * Math.PI;
+      f.material = fletchMat; f.parent = parent;
+    }
+    parent.getChildMeshes().forEach(m => { m.isPickable = false; });
+    return parent;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  ENVIRONMENT
+  // ═══════════════════════════════════════════════════════════════
+  function createEnvironment(sc) {
+    // ── Ground ──
+    const ground = BABYLON.MeshBuilder.CreateGround("ground", {width:200, height:200, subdivisions:1}, sc);
+    const groundMat = new BABYLON.StandardMaterial("groundMat", sc);
+    groundMat.diffuseColor = new BABYLON.Color3(0.28, 0.42, 0.15);
+    groundMat.specularColor = BABYLON.Color3.Black();
+    ground.material = groundMat;
+    ground.isPickable = false;
+    ground.freezeWorldMatrix();
+    groundMat.freeze();
+
+    // ── Path visuals — flat ribbons on ground ──
+    PATHS.forEach((waypoints, pi) => {
+      const pathWidth = 1.8;
+      const leftPts = [], rightPts = [];
+      for (let i = 0; i < waypoints.length; i++) {
+        const wp = waypoints[i];
+        const curr = new BABYLON.Vector3(wp.x, 0.06, wp.z);
+        let dir;
+        if (i < waypoints.length - 1) {
+          const next = new BABYLON.Vector3(waypoints[i+1].x, 0, waypoints[i+1].z);
+          dir = next.subtract(curr).normalize();
+        } else {
+          const prev = new BABYLON.Vector3(waypoints[i-1].x, 0, waypoints[i-1].z);
+          dir = curr.subtract(prev).normalize();
+        }
+        const perp = new BABYLON.Vector3(-dir.z, 0, dir.x);
+        leftPts.push(curr.add(perp.scale(pathWidth)));
+        rightPts.push(curr.subtract(perp.scale(pathWidth)));
+      }
+      const ribbon = BABYLON.MeshBuilder.CreateRibbon("pathR"+pi, {
+        pathArray: [leftPts, rightPts], sideOrientation: BABYLON.Mesh.DOUBLESIDE
+      }, sc);
+      const dirtMat = new BABYLON.StandardMaterial("dirt"+pi, sc);
+      dirtMat.diffuseColor = new BABYLON.Color3(0.52, 0.42, 0.3);
+      dirtMat.specularColor = BABYLON.Color3.Black();
+      ribbon.material = dirtMat;
+      ribbon.isPickable = false;
+      ribbon.freezeWorldMatrix();
+      dirtMat.freeze();
+    });
+
+    // ── Sky sphere — sunset gradient ──
+    const sky = BABYLON.MeshBuilder.CreateSphere("sky", {diameter:300, segments:16, sideOrientation:BABYLON.Mesh.BACKSIDE}, sc);
+    const skyMat = new BABYLON.StandardMaterial("skyMat", sc);
+    skyMat.disableLighting = true;
+    skyMat.backFaceCulling = false;
+    // Gradient via emissive texture
+    const skyTex = new BABYLON.DynamicTexture("skyTex", {width:4, height:256}, sc);
+    const sctx = skyTex.getContext();
+    const grad = sctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, '#1a0a2e');    // zenith — deep purple
+    grad.addColorStop(0.3, '#2d1b4e'); // upper — purple
+    grad.addColorStop(0.55, '#cc5522'); // mid — orange
+    grad.addColorStop(0.75, '#e88833'); // lower — warm orange
+    grad.addColorStop(0.9, '#ffaa44');  // horizon — gold
+    grad.addColorStop(1, '#ffcc66');
+    sctx.fillStyle = grad;
+    sctx.fillRect(0, 0, 4, 256);
+    skyTex.update();
+    skyMat.emissiveTexture = skyTex;
+    skyMat.diffuseColor = BABYLON.Color3.Black();
+    sky.material = skyMat;
+    sky.isPickable = false;
+    sky.freezeWorldMatrix();
+    skyMat.freeze();
+
+    // ── Fog ──
+    sc.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+    sc.fogDensity = CONFIG.FOG_DENSITY;
+    sc.fogColor = new BABYLON.Color3(0.55, 0.35, 0.2);
+
+    // ── Lighting ──
+    // Hemisphere — warm from above, cool from below
+    const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), sc);
+    hemi.diffuse = new BABYLON.Color3(0.85, 0.7, 0.5);
+    hemi.groundColor = new BABYLON.Color3(0.15, 0.18, 0.25);
+    hemi.intensity = 0.7;
+
+    // Directional — low sun
+    const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.5, -0.3, 0.7), sc);
+    sun.diffuse = new BABYLON.Color3(1.0, 0.75, 0.45);
+    sun.intensity = 0.5;
+
+    // ── Tower ──
+    const towerData = buildTower(sc);
+
+    // ── Torch lights on tower ──
+    towerData.torchPositions.forEach((pos, i) => {
+      const light = new BABYLON.PointLight("torch"+i, pos, sc);
+      light.diffuse = new BABYLON.Color3(1.0, 0.65, 0.25);
+      light.intensity = 0.6;
+      light.range = 12;
+      torchLights.push(light);
+
+      // Torch flame particles
+      const flame = new BABYLON.ParticleSystem("flame"+i, 30, sc);
+      flame.createPointEmitter(new BABYLON.Vector3(-0.05,0,-0.05), new BABYLON.Vector3(0.05,0.3,0.05));
+      flame.emitter = pos;
+      flame.minSize = 0.08; flame.maxSize = 0.2;
+      flame.minLifeTime = 0.15; flame.maxLifeTime = 0.4;
+      flame.emitRate = 40;
+      flame.color1 = new BABYLON.Color4(1,0.7,0.2,1);
+      flame.color2 = new BABYLON.Color4(1,0.4,0.1,0.8);
+      flame.colorDead = new BABYLON.Color4(0.3,0.1,0,0);
+      flame.minEmitPower = 0.3; flame.maxEmitPower = 0.6;
+      flame.gravity = new BABYLON.Vector3(0, 1.5, 0);
+      flame.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+      flame.updateSpeed = 0.02;
+      flame.start();
+    });
+
+    // ── Trees ──
+    const treePositions = [];
+    const minDistFromPath = 5;
+    const minDistFromTower = 8;
+    for (let i = 0; i < 30; i++) {
+      let attempts = 0, valid = false, px, pz;
+      while (!valid && attempts < 20) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 12 + Math.random() * 75;
+        px = Math.cos(angle) * dist;
+        pz = Math.sin(angle) * dist;
+        valid = true;
+        // Check distance from tower
+        if (Math.sqrt(px*px + pz*pz) < minDistFromTower) { valid = false; }
+        // Check distance from paths
+        if (valid) {
+          for (const path of PATHS) {
+            for (const wp of path) {
+              const dd = Math.sqrt((px-wp.x)**2 + (pz-wp.z)**2);
+              if (dd < minDistFromPath) { valid = false; break; }
+            }
+            if (!valid) break;
+          }
+        }
+        attempts++;
+      }
+      if (valid) {
+        const treeType = Math.floor(Math.random() * 3);
+        buildTree(sc, treeType, new BABYLON.Vector3(px, 0, pz));
+        treePositions.push({x:px, z:pz});
+      }
+    }
+
+    // ── Stone walls near tower (inner defense ring) ──
+    const wallPts = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      wallPts.push({x: Math.cos(a) * 7, z: Math.sin(a) * 7});
+    }
+    // Build walls between consecutive points, leave gaps for paths
+    for (let i = 0; i < wallPts.length; i++) {
+      const next = (i + 1) % wallPts.length;
+      // Check if this wall segment crosses a path (skip if so)
+      const mx = (wallPts[i].x + wallPts[next].x) / 2;
+      const mz = (wallPts[i].z + wallPts[next].z) / 2;
+      let blocked = false;
+      for (const path of PATHS) {
+        const lastWP = path[path.length - 1];
+        const d = Math.sqrt((mx-lastWP.x)**2 + (mz-lastWP.z)**2);
+        if (d < 5) { blocked = true; break; }
+      }
+      if (!blocked) {
+        buildWall(sc, wallPts[i], wallPts[next]);
+      }
+    }
+
+    // ── Props — barrels and crates near tower ──
+    const propMat = new BABYLON.StandardMaterial("propMat", sc);
+    propMat.diffuseColor = new BABYLON.Color3(0.4, 0.28, 0.15);
+    propMat.specularColor = BABYLON.Color3.Black();
+    propMat.freeze();
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 5 + Math.random() * 3;
+      const px = Math.cos(angle) * dist;
+      const pz = Math.sin(angle) * dist;
+      if (Math.random() > 0.5) {
+        // Barrel
+        const barrel = BABYLON.MeshBuilder.CreateCylinder("barrel"+i, {height:1, diameterTop:0.5, diameterBottom:0.55, tessellation:8}, sc);
+        barrel.position.set(px, 0.5, pz);
+        barrel.material = propMat; barrel.isPickable = false; barrel.freezeWorldMatrix();
+      } else {
+        // Crate
+        const crate = BABYLON.MeshBuilder.CreateBox("crate"+i, {size:0.7}, sc);
+        crate.position.set(px, 0.35, pz);
+        crate.rotation.y = Math.random() * Math.PI;
+        crate.material = propMat; crate.isPickable = false; crate.freezeWorldMatrix();
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  RETICLE
+  // ═══════════════════════════════════════════════════════════════
+  function createReticle(sc) {
+    reticleNode = new BABYLON.TransformNode("reticleNode", sc);
+    reticleNode.parent = camera;
+    reticleNode.position = new BABYLON.Vector3(0, 0, 4);
+
+    const ringMat = new BABYLON.StandardMaterial("ringMat", sc);
+    ringMat.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.15);
+    ringMat.emissiveColor = new BABYLON.Color3(0.4, 0.3, 0.05);
+    ringMat.specularColor = BABYLON.Color3.Black();
+    ringMat.alpha = 0.7;
+
+    reticleRing = BABYLON.MeshBuilder.CreateTorus("reticleRing", {diameter:0.22, thickness:0.015, tessellation:24}, sc);
+    reticleRing.parent = reticleNode;
+    reticleRing.material = ringMat;
+    reticleRing.isPickable = false;
+    reticleRing.renderingGroupId = 1;
+
+    const fillMat = new BABYLON.StandardMaterial("fillMat", sc);
+    fillMat.diffuseColor = new BABYLON.Color3(1.0, 0.75, 0.2);
+    fillMat.emissiveColor = new BABYLON.Color3(0.5, 0.35, 0.05);
+    fillMat.specularColor = BABYLON.Color3.Black();
+    fillMat.alpha = 0;
+
+    reticleFill = BABYLON.MeshBuilder.CreateDisc("reticleFill", {radius:0.09, tessellation:24}, sc);
+    reticleFill.parent = reticleNode;
+    reticleFill.material = fillMat;
+    reticleFill.isPickable = false;
+    reticleFill.renderingGroupId = 1;
+    reticleFill.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    reticleRing.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+
+    // Center dot
+    const dotMat = new BABYLON.StandardMaterial("dotMat", sc);
+    dotMat.diffuseColor = new BABYLON.Color3(0.9, 0.7, 0.2);
+    dotMat.emissiveColor = new BABYLON.Color3(0.4, 0.3, 0.05);
+    dotMat.specularColor = BABYLON.Color3.Black();
+    dotMat.alpha = 0.5;
+    const dot = BABYLON.MeshBuilder.CreateDisc("dot", {radius:0.012, tessellation:12}, sc);
+    dot.parent = reticleNode;
+    dot.material = dotMat;
+    dot.isPickable = false;
+    dot.renderingGroupId = 1;
+    dot.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  HUD — Camera-attached info panel
+  // ═══════════════════════════════════════════════════════════════
+  function createHUD(sc) {
+    const hudNode = new BABYLON.TransformNode("hudNode", sc);
+    hudNode.parent = camera;
+    hudNode.position = new BABYLON.Vector3(0, -0.35, 1.2);
+
+    hudPlane = BABYLON.MeshBuilder.CreatePlane("hudPlane", {width:0.7, height:0.18}, sc);
+    hudPlane.parent = hudNode;
+    hudPlane.rotation.y = Math.PI;
+    hudPlane.isPickable = false;
+    hudPlane.renderingGroupId = 1;
+
+    hudTexture = new BABYLON.DynamicTexture("hudTex", {width:700, height:180}, sc, false);
+    const hudMat = new BABYLON.StandardMaterial("hudMat", sc);
+    hudMat.diffuseTexture = hudTexture;
+    hudMat.emissiveTexture = hudTexture;
+    hudMat.specularColor = BABYLON.Color3.Black();
+    hudMat.disableLighting = true;
+    hudMat.backFaceCulling = false;
+    hudMat.alpha = 0.85;
+    hudPlane.material = hudMat;
+  }
+
+  function updateHUD() {
+    if (!hudTexture) return;
+    const ctx = hudTexture.getContext();
+    ctx.clearRect(0, 0, 700, 180);
+
+    // Background
+    ctx.fillStyle = 'rgba(20, 12, 5, 0.7)';
+    ctx.fillRect(0, 0, 700, 180);
+    ctx.strokeStyle = '#8B6914';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(2, 2, 696, 176);
+
+    // Tower HP bar
+    ctx.fillStyle = '#887755';
+    ctx.font = 'bold 22px Georgia';
+    ctx.fillText('TOWER', 15, 30);
+    // Bar background
+    ctx.fillStyle = '#332211';
+    ctx.fillRect(15, 40, 250, 18);
+    // Bar fill
+    const hpPct = Math.max(0, STATE.towerHP / CONFIG.TOWER_MAX_HP);
+    const barColor = hpPct > 0.5 ? '#44aa44' : hpPct > 0.25 ? '#ccaa22' : '#cc3333';
+    ctx.fillStyle = barColor;
+    ctx.fillRect(15, 40, 250 * hpPct, 18);
+    // HP text
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 14px Georgia';
+    ctx.fillText(Math.ceil(STATE.towerHP) + '/' + CONFIG.TOWER_MAX_HP, 120, 55);
+
+    // Wave
+    ctx.fillStyle = '#d4a017';
+    ctx.font = 'bold 28px Georgia';
+    const waveText = 'WAVE ' + toRoman(STATE.wave);
+    ctx.fillText(waveText, 300, 35);
+
+    // Score
+    ctx.fillStyle = '#ccaa55';
+    ctx.font = '20px Georgia';
+    ctx.fillText('Score: ' + STATE.score, 300, 62);
+
+    // Combo
+    if (STATE.combo > 1) {
+      ctx.fillStyle = '#ffcc44';
+      ctx.font = 'bold 24px Georgia';
+      ctx.fillText('COMBO x' + STATE.combo, 480, 35);
+    }
+
+    // Power-up indicator
+    if (STATE.activePowerUp) {
+      const pupColors = {FIRE:'#ff4422', ICE:'#44aaff', MULTI:'#44ff44', RAPID:'#ffaa22'};
+      ctx.fillStyle = pupColors[STATE.activePowerUp] || '#ffffff';
+      ctx.font = 'bold 20px Georgia';
+      ctx.fillText(STATE.activePowerUp + ' ARROW', 15, 90);
+      // Timer bar
+      ctx.fillStyle = '#332211';
+      ctx.fillRect(15, 98, 150, 10);
+      ctx.fillStyle = pupColors[STATE.activePowerUp] || '#ffaa22';
+      ctx.fillRect(15, 98, 150 * (STATE.powerUpTimer / CONFIG.POWERUP_DURATION), 10);
+    }
+
+    // Wave break countdown
+    if (STATE.phase === 'WAVE_BREAK') {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px Georgia';
+      ctx.fillText('Next wave in ' + Math.ceil(STATE.waveBreakTimer) + 's', 15, 140);
+    }
+
+    // High score
+    ctx.fillStyle = '#665533';
+    ctx.font = '14px Georgia';
+    ctx.fillText('Best: ' + Math.max(STATE.highScore, STATE.score), 580, 165);
+
+    // Tower damage flash
+    if (STATE.towerDamageFlash > 0) {
+      ctx.fillStyle = 'rgba(200, 30, 30, ' + (STATE.towerDamageFlash * 0.4) + ')';
+      ctx.fillRect(0, 0, 700, 180);
+    }
+
+    hudTexture.update();
+  }
+
+  function toRoman(num) {
+    if (num <= 0) return '0';
+    const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
+    const syms = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
+    let result = '';
+    for (let i = 0; i < vals.length; i++) {
+      while (num >= vals[i]) { result += syms[i]; num -= vals[i]; }
+    }
+    return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  WAVE ANNOUNCEMENT — 3D text in the sky
+  // ═══════════════════════════════════════════════════════════════
+  function createAnnouncement(sc) {
+    announceNode = new BABYLON.TransformNode("announceNode", sc);
+    announceNode.parent = camera;
+    announceNode.position = new BABYLON.Vector3(0, 0.15, 3);
+
+    announcePlane = BABYLON.MeshBuilder.CreatePlane("announcePlane", {width:1.8, height:0.35}, sc);
+    announcePlane.parent = announceNode;
+    announcePlane.rotation.y = Math.PI;
+    announcePlane.isPickable = false;
+    announcePlane.renderingGroupId = 1;
+    announcePlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+
+    announceTexture = new BABYLON.DynamicTexture("announceTex", {width:900, height:180}, sc, false);
+    const mat = new BABYLON.StandardMaterial("announceMat", sc);
+    mat.diffuseTexture = announceTexture;
+    mat.emissiveTexture = announceTexture;
+    mat.specularColor = BABYLON.Color3.Black();
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    mat.alpha = 0;
+    announcePlane.material = mat;
+  }
+
+  function showAnnouncement(text, duration, isBoss) {
+    if (!announceTexture) return;
+    const ctx = announceTexture.getContext();
+    ctx.clearRect(0, 0, 900, 180);
+
+    ctx.fillStyle = isBoss ? '#441111' : '#111111';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(0, 0, 900, 180);
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = isBoss ? '#cc3333' : '#d4a017';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(5, 5, 890, 170);
+
+    ctx.fillStyle = isBoss ? '#ff4444' : '#d4a017';
+    ctx.font = 'bold 48px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 450, 75);
+
+    if (isBoss) {
+      ctx.fillStyle = '#cc8888';
+      ctx.font = 'italic 28px Georgia';
+      ctx.fillText('A MIGHTY FOE APPROACHES', 450, 130);
+    } else {
+      ctx.fillStyle = '#aa8844';
+      ctx.font = 'italic 28px Georgia';
+      ctx.fillText('ENEMIES APPROACH', 450, 130);
+    }
+    ctx.textAlign = 'start';
+    announceTexture.update();
+
+    announcePlane.material.alpha = 1;
+    STATE.announcementTimer = duration || 3;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  ENEMY SYSTEM
+  // ═══════════════════════════════════════════════════════════════
+  const enemyTemplates = {};
+
+  function initEnemyTemplates(sc) {
+    for (const key of Object.keys(ENEMY)) {
+      enemyTemplates[key] = buildEnemyMesh(sc, key);
+    }
+  }
+
+  function spawnEnemy(typeName, pathIndex) {
+    if (STATE.enemies.length >= CONFIG.MAX_ENEMIES) return;
+    const cfg = ENEMY[typeName];
+    const template = enemyTemplates[typeName];
+    if (!template) return;
+
+    const clone = template.clone("enemy_" + Date.now(), null);
+    clone.setEnabled(true);
+    clone.getChildMeshes().forEach(m => { m.setEnabled(true); m.isPickable = false; });
+
+    const path = PATHS[pathIndex];
+    clone.position.set(path[0].x, 0, path[0].z);
+
+    const enemy = {
+      mesh: clone,
+      config: cfg,
+      typeName: typeName,
+      hp: cfg.hp,
+      maxHp: cfg.hp,
+      pathIndex: pathIndex,
+      waypointIndex: 0,
+      progress: 0,
+      speed: cfg.speed * (0.9 + Math.random() * 0.2),
+      slowed: 0,
+      alive: true,
+    };
+
+    STATE.enemies.push(enemy);
+    return enemy;
+  }
+
+  function updateEnemies(dt) {
+    for (let i = STATE.enemies.length - 1; i >= 0; i--) {
+      const e = STATE.enemies[i];
+      if (!e.alive) continue;
+
+      const path = PATHS[e.pathIndex];
+      if (e.waypointIndex >= path.length - 1) {
+        // Reached tower — deal damage
+        towerTakeDamage(e.config.damage);
+        killEnemy(i, false);
+        continue;
+      }
+
+      // Movement
+      let speed = e.speed;
+      if (e.slowed > 0) { speed *= 0.4; e.slowed -= dt; }
+
+      const from = path[e.waypointIndex];
+      const to = path[e.waypointIndex + 1];
+      const segDx = to.x - from.x, segDz = to.z - from.z;
+      const segLen = Math.sqrt(segDx * segDx + segDz * segDz);
+
+      e.progress += (speed * dt) / segLen;
+
+      if (e.progress >= 1) {
+        e.waypointIndex++;
+        e.progress = 0;
+        if (e.waypointIndex >= path.length - 1) {
+          towerTakeDamage(e.config.damage);
+          killEnemy(i, false);
+          continue;
+        }
+      }
+
+      // Interpolate position
+      const wp0 = path[e.waypointIndex];
+      const wp1 = path[e.waypointIndex + 1];
+      const x = wp0.x + (wp1.x - wp0.x) * e.progress;
+      const z = wp0.z + (wp1.z - wp0.z) * e.progress;
+      e.mesh.position.set(x, 0, z);
+
+      // Face movement direction
+      const faceAngle = Math.atan2(wp1.x - wp0.x, wp1.z - wp0.z);
+      e.mesh.rotation.y = faceAngle;
+
+      // Bobbing walk animation
+      e.mesh.position.y = Math.abs(Math.sin(performance.now() * 0.005 * speed)) * 0.15;
+    }
+  }
+
+  function killEnemy(index, scored) {
+    const e = STATE.enemies[index];
+    if (!e) return;
+    e.alive = false;
+
+    if (scored) {
+      // Score and combo
+      let points = e.config.score;
+      STATE.combo++;
+      STATE.comboTimer = CONFIG.COMBO_WINDOW;
+      if (STATE.combo > 1) {
+        points = Math.floor(points * (1 + STATE.combo * 0.15));
+        playSound('combo');
+      }
+      STATE.score += points;
+      STATE.enemiesKilled++;
+      if (STATE.combo > STATE.maxCombo) STATE.maxCombo = STATE.combo;
+
+      // Death particles
+      spawnDeathParticles(e.mesh.position.clone(), e.config.color);
+      playSound('enemyDeath');
+    }
+
+    // Dispose mesh
+    e.mesh.getChildMeshes().forEach(m => m.dispose());
+    e.mesh.dispose();
+    STATE.enemies.splice(index, 1);
+  }
+
+  function towerTakeDamage(amount) {
+    STATE.towerHP -= amount;
+    STATE.towerDamageFlash = 1;
+    playSound('towerDamage');
+
+    // Camera shake
+    const origPos = camera.position.clone();
+    let shakeT = 0;
+    const shakeObs = scene.onBeforeRenderObservable.add(() => {
+      shakeT += engine.getDeltaTime() / 1000;
+      if (shakeT > 0.4) {
+        camera.position.copyFrom(origPos);
+        scene.onBeforeRenderObservable.remove(shakeObs);
+        return;
+      }
+      const intensity = (1 - shakeT / 0.4) * 0.3;
+      camera.position.x = origPos.x + (Math.random() - 0.5) * intensity;
+      camera.position.z = origPos.z + (Math.random() - 0.5) * intensity;
+    });
+
+    if (STATE.towerHP <= 0) {
+      STATE.towerHP = 0;
+      gameOver();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  COMBAT — Gaze Detection & Arrow System
+  // ═══════════════════════════════════════════════════════════════
+  function updateGaze(dt) {
+    if (STATE.phase !== 'PLAYING' && STATE.phase !== 'WAVE_BREAK') {
+      STATE.gazeTarget = null;
+      STATE.gazeCharge = 0;
+      return;
+    }
+
+    const forward = camera.getForwardRay().direction;
+    const camPos = camera.position;
+    const gazeAngleRad = CONFIG.GAZE_ANGLE_DEG * Math.PI / 180;
+
+    let bestEnemy = null;
+    let bestAngle = gazeAngleRad;
+
+    for (const enemy of STATE.enemies) {
+      if (!enemy.alive) continue;
+      const ePos = enemy.mesh.position;
+      const toEnemy = ePos.subtract(camPos);
+      const dist = toEnemy.length();
+      if (dist < 1) continue;
+      const dir = toEnemy.scale(1 / dist);
+      const dotVal = BABYLON.Vector3.Dot(forward, dir);
+      const angle = Math.acos(Math.min(1, Math.max(-1, dotVal)));
+
+      // Scale detection cone by enemy size (bigger enemies easier to target)
+      const sizeBonus = (enemy.config.radius - 0.4) * 3 * Math.PI / 180;
+
+      if (angle < bestAngle + sizeBonus) {
+        bestAngle = angle;
+        bestEnemy = enemy;
+      }
+    }
+
+    if (bestEnemy) {
+      if (STATE.gazeTarget !== bestEnemy) {
+        STATE.gazeTarget = bestEnemy;
+        STATE.gazeCharge = 0;
+        playSound('bowDraw', 0.5);
+      }
+
+      let chargeRate = 1 / bestEnemy.config.dwellTime;
+      if (STATE.activePowerUp === 'RAPID') chargeRate *= 2;
+
+      STATE.gazeCharge += dt * chargeRate;
+
+      if (STATE.gazeCharge >= 1) {
+        fireArrow(bestEnemy);
+        STATE.gazeCharge = 0;
+      }
+    } else {
+      if (STATE.gazeTarget) {
+        STATE.gazeTarget = null;
+      }
+      STATE.gazeCharge = Math.max(0, STATE.gazeCharge - dt * 3);
+    }
+
+    // Update reticle visuals
+    updateReticleVisuals();
+  }
+
+  function updateReticleVisuals() {
+    if (!reticleRing) return;
+    const hasTarget = STATE.gazeTarget !== null;
+    const charge = STATE.gazeCharge;
+
+    // Ring color: gold when idle, brighter when targeting
+    const ringMat = reticleRing.material;
+    if (hasTarget) {
+      ringMat.emissiveColor.set(0.6 + charge * 0.4, 0.4 + charge * 0.3, 0.05);
+      ringMat.alpha = 0.9;
+      reticleRing.scaling.setAll(1 + charge * 0.3);
+    } else {
+      ringMat.emissiveColor.set(0.3, 0.2, 0.03);
+      ringMat.alpha = 0.5;
+      reticleRing.scaling.setAll(1);
+    }
+
+    // Fill disc — grows with charge
+    const fillMat = reticleFill.material;
+    if (charge > 0.01) {
+      fillMat.alpha = charge * 0.6;
+      reticleFill.scaling.setAll(charge);
+    } else {
+      fillMat.alpha = 0;
+    }
+  }
+
+  function fireArrow(target) {
+    if (STATE.arrows.length >= CONFIG.MAX_ARROWS) return;
+
+    const start = camera.position.clone();
+    const end = target.mesh.position.clone();
+    end.y += target.config.height * 0.5;
+
+    const distance = BABYLON.Vector3.Distance(start, end);
+    const duration = distance / CONFIG.ARROW_SPEED;
+    const arcHeight = Math.min(distance * 0.12, CONFIG.ARROW_ARC);
+
+    const arrowMesh = buildArrowMesh(scene);
+    arrowMesh.position = start.clone();
+
+    // Fire arrow color based on power-up
+    if (STATE.activePowerUp === 'FIRE') {
+      arrowMesh.getChildMeshes().forEach(m => {
+        if (m.material && m.material.name === 'arrowMat') {
+          m.material = m.material.clone("fireArrow");
+          m.material.emissiveColor = new BABYLON.Color3(0.6, 0.2, 0);
+        }
+      });
+    } else if (STATE.activePowerUp === 'ICE') {
+      arrowMesh.getChildMeshes().forEach(m => {
+        if (m.material && m.material.name === 'arrowMat') {
+          m.material = m.material.clone("iceArrow");
+          m.material.emissiveColor = new BABYLON.Color3(0, 0.2, 0.5);
+          m.material.diffuseColor = new BABYLON.Color3(0.5, 0.7, 1.0);
+        }
+      });
+    }
+
+    const arrowData = {
+      mesh: arrowMesh,
+      start: start,
+      end: end,
+      target: target,
+      t: 0,
+      duration: duration,
+      arcHeight: arcHeight,
+      powerUp: STATE.activePowerUp,
+    };
+
+    STATE.arrows.push(arrowData);
+    playSound('bowRelease');
+
+    // Multi-shot: fire at 2 additional targets
+    if (STATE.activePowerUp === 'MULTI') {
+      const otherTargets = STATE.enemies.filter(e => e !== target && e.alive).slice(0, 2);
+      for (const ot of otherTargets) {
+        const extraArrow = buildArrowMesh(scene);
+        extraArrow.position = start.clone();
+        const ed = ot.mesh.position.clone();
+        ed.y += ot.config.height * 0.5;
+        const d2 = BABYLON.Vector3.Distance(start, ed);
+        STATE.arrows.push({
+          mesh: extraArrow, start: start.clone(), end: ed, target: ot,
+          t: 0, duration: d2 / CONFIG.ARROW_SPEED,
+          arcHeight: Math.min(d2 * 0.12, CONFIG.ARROW_ARC),
+          powerUp: null,
+        });
+      }
+    }
+  }
+
+  function updateArrows(dt) {
+    for (let i = STATE.arrows.length - 1; i >= 0; i--) {
+      const a = STATE.arrows[i];
+      a.t += dt / a.duration;
+
+      if (a.t >= 1) {
+        arrowImpact(a);
+        a.mesh.getChildMeshes().forEach(m => m.dispose());
+        a.mesh.dispose();
+        STATE.arrows.splice(i, 1);
+        continue;
+      }
+
+      // Parabolic arc position
+      const prevPos = a.mesh.position.clone();
+      const lx = a.start.x + (a.end.x - a.start.x) * a.t;
+      const lz = a.start.z + (a.end.z - a.start.z) * a.t;
+      const ly = a.start.y + (a.end.y - a.start.y) * a.t;
+      const arc = 4 * a.arcHeight * a.t * (1 - a.t);
+      a.mesh.position.set(lx, ly + arc, lz);
+
+      // Face direction of travel
+      const nextT = Math.min(a.t + 0.05, 1);
+      const nx = a.start.x + (a.end.x - a.start.x) * nextT;
+      const nz = a.start.z + (a.end.z - a.start.z) * nextT;
+      const ny = a.start.y + (a.end.y - a.start.y) * nextT + 4 * a.arcHeight * nextT * (1 - nextT);
+      const lookTarget = new BABYLON.Vector3(nx, ny, nz);
+      a.mesh.lookAt(lookTarget);
+    }
+  }
+
+  function arrowImpact(arrowData) {
+    playSound('arrowHit');
+
+    const target = arrowData.target;
+    if (!target || !target.alive) return;
+
+    // Damage
+    target.hp--;
+
+    // Ice slow effect
+    if (arrowData.powerUp === 'ICE') {
+      target.slowed = 5;
+    }
+
+    // Fire AoE
+    if (arrowData.powerUp === 'FIRE') {
+      const aoeRadius = 5;
+      for (const e of STATE.enemies) {
+        if (e === target || !e.alive) continue;
+        const d = BABYLON.Vector3.Distance(e.mesh.position, target.mesh.position);
+        if (d < aoeRadius) {
+          e.hp--;
+          if (e.hp <= 0) {
+            const idx = STATE.enemies.indexOf(e);
+            if (idx >= 0) killEnemy(idx, true);
+          }
+        }
+      }
+      spawnFireExplosion(arrowData.end);
+    }
+
+    // Impact particles
+    spawnImpactParticles(arrowData.end, arrowData.powerUp);
+
+    if (target.hp <= 0) {
+      const idx = STATE.enemies.indexOf(target);
+      if (idx >= 0) killEnemy(idx, true);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  POWER-UP SYSTEM
+  // ═══════════════════════════════════════════════════════════════
+  function spawnPowerUp() {
+    if (STATE.powerUps.length >= 2) return;
+    const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 15 + Math.random() * 30;
+    const x = Math.cos(angle) * dist;
+    const z = Math.sin(angle) * dist;
+
+    const colors = {FIRE:[1,0.3,0], ICE:[0.2,0.5,1], MULTI:[0.2,1,0.2], RAPID:[1,0.7,0]};
+    const c = colors[type];
+
+    const mat = new BABYLON.StandardMaterial("pup_"+type, scene);
+    mat.diffuseColor = new BABYLON.Color3(c[0], c[1], c[2]);
+    mat.emissiveColor = new BABYLON.Color3(c[0]*0.4, c[1]*0.4, c[2]*0.4);
+    mat.specularColor = BABYLON.Color3.Black();
+    mat.alpha = 0.85;
+
+    const mesh = BABYLON.MeshBuilder.CreateBox("powerUp", {size:1.0}, scene);
+    mesh.position.set(x, 2, z);
+    mesh.material = mat;
+    mesh.isPickable = false;
+
+    STATE.powerUps.push({mesh, type, time: 0});
+  }
+
+  function updatePowerUps(dt) {
+    // Spawn timer
+    if (STATE.phase === 'PLAYING') {
+      STATE.powerUpSpawnTimer -= dt;
+      if (STATE.powerUpSpawnTimer <= 0) {
+        spawnPowerUp();
+        STATE.powerUpSpawnTimer = CONFIG.POWERUP_INTERVAL;
+      }
+    }
+
+    // Animate and check gaze on power-ups
+    const forward = camera.getForwardRay().direction;
+    const camPos = camera.position;
+
+    for (let i = STATE.powerUps.length - 1; i >= 0; i--) {
+      const p = STATE.powerUps[i];
+      p.time += dt;
+
+      // Float and rotate
+      p.mesh.position.y = 2 + Math.sin(p.time * 2) * 0.5;
+      p.mesh.rotation.y += dt * 1.5;
+      p.mesh.rotation.x += dt * 0.8;
+
+      // Despawn after 20s
+      if (p.time > 20) {
+        p.mesh.dispose();
+        STATE.powerUps.splice(i, 1);
+        continue;
+      }
+
+      // Gaze detection for power-up pickup
+      const toP = p.mesh.position.subtract(camPos);
+      const dist = toP.length();
+      const dir = toP.scale(1 / dist);
+      const dotVal = BABYLON.Vector3.Dot(forward, dir);
+      const angle = Math.acos(Math.min(1, Math.max(-1, dotVal)));
+
+      if (angle < 12 * Math.PI / 180) {
+        // Collect!
+        activatePowerUp(p.type);
+        p.mesh.dispose();
+        STATE.powerUps.splice(i, 1);
+      }
+    }
+
+    // Active power-up timer
+    if (STATE.activePowerUp) {
+      STATE.powerUpTimer -= dt;
+      if (STATE.powerUpTimer <= 0) {
+        STATE.activePowerUp = null;
+        STATE.powerUpTimer = 0;
+      }
+    }
+  }
+
+  function activatePowerUp(type) {
+    STATE.activePowerUp = type;
+    STATE.powerUpTimer = CONFIG.POWERUP_DURATION;
+    playSound('powerUp');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  WAVE MANAGEMENT
+  // ═══════════════════════════════════════════════════════════════
+  function generateWave(waveNum) {
+    const enemies = [];
+    const baseCount = 3 + Math.floor(waveNum * 1.5);
+
+    const available = Object.entries(ENEMY).filter(([k, v]) => waveNum >= v.unlockWave);
+
+    // Boss every 5 waves
+    const isBoss = waveNum > 0 && waveNum % 5 === 0;
+    if (isBoss) {
+      enemies.push({type:'TROLL', path: Math.floor(Math.random() * 3)});
+    }
+
+    for (let i = 0; i < baseCount; i++) {
+      const [typeName] = available[Math.floor(Math.random() * available.length)];
+      if (typeName === 'TROLL' && !isBoss) continue; // trolls only on boss waves
+      enemies.push({type: typeName, path: Math.floor(Math.random() * 3)});
+    }
+
+    // Ensure at least baseCount enemies
+    while (enemies.length < baseCount) {
+      enemies.push({type:'SOLDIER', path: Math.floor(Math.random() * 3)});
+    }
+
+    return enemies;
+  }
+
+  function startWave() {
+    STATE.wave++;
+    STATE.waveQueue = generateWave(STATE.wave);
+    STATE.spawnTimer = 0;
+    STATE.phase = 'PLAYING';
+
+    const isBoss = STATE.wave % 5 === 0;
+    showAnnouncement('WAVE ' + toRoman(STATE.wave), 3, isBoss);
+
+    if (isBoss) {
+      playSound('bossHorn');
+    } else {
+      playSound('waveHorn');
+    }
+  }
+
+  function updateWaves(dt) {
+    if (STATE.phase === 'WAVE_BREAK') {
+      STATE.waveBreakTimer -= dt;
+      if (STATE.waveBreakTimer <= 0) {
+        startWave();
+      }
+      return;
+    }
+
+    if (STATE.phase !== 'PLAYING') return;
+
+    // Spawn from queue
+    if (STATE.waveQueue.length > 0) {
+      STATE.spawnTimer -= dt;
+      if (STATE.spawnTimer <= 0) {
+        const next = STATE.waveQueue.shift();
+        spawnEnemy(next.type, next.path);
+        // Faster spawns in later waves
+        STATE.spawnTimer = CONFIG.SPAWN_INTERVAL * Math.max(0.4, 1 - STATE.wave * 0.03);
+      }
+    }
+
+    // Check if wave is complete (queue empty + no living enemies)
+    if (STATE.waveQueue.length === 0 && STATE.enemies.length === 0) {
+      STATE.phase = 'WAVE_BREAK';
+      STATE.waveBreakTimer = CONFIG.WAVE_BREAK;
+    }
+  }
+
+  // Combo decay
+  function updateCombo(dt) {
+    if (STATE.combo > 0) {
+      STATE.comboTimer -= dt;
+      if (STATE.comboTimer <= 0) {
+        STATE.combo = 0;
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  PARTICLES
+  // ═══════════════════════════════════════════════════════════════
+  function spawnDeathParticles(pos, color) {
+    const ps = new BABYLON.ParticleSystem("death", 30, scene);
+    ps.createPointEmitter(new BABYLON.Vector3(-1,-1,-1), new BABYLON.Vector3(1,2,1));
+    ps.emitter = pos;
+    ps.minSize = 0.15; ps.maxSize = 0.35;
+    ps.minLifeTime = 0.3; ps.maxLifeTime = 0.7;
+    ps.emitRate = 100;
+    ps.color1 = new BABYLON.Color4(color[0], color[1], color[2], 1);
+    ps.color2 = new BABYLON.Color4(color[0]*0.5, color[1]*0.5, color[2]*0.5, 0.8);
+    ps.colorDead = new BABYLON.Color4(0.2, 0.2, 0.2, 0);
+    ps.minEmitPower = 2; ps.maxEmitPower = 5;
+    ps.gravity = new BABYLON.Vector3(0, -5, 0);
+    ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+    ps.targetStopDuration = 0.1;
+    ps.disposeOnStop = true;
+    ps.start();
+  }
+
+  function spawnImpactParticles(pos, powerUpType) {
+    const ps = new BABYLON.ParticleSystem("impact", 15, scene);
+    ps.createPointEmitter(new BABYLON.Vector3(-0.5,-0.5,-0.5), new BABYLON.Vector3(0.5,1,0.5));
+    ps.emitter = pos;
+    ps.minSize = 0.05; ps.maxSize = 0.15;
+    ps.minLifeTime = 0.1; ps.maxLifeTime = 0.3;
+    ps.emitRate = 80;
+
+    if (powerUpType === 'ICE') {
+      ps.color1 = new BABYLON.Color4(0.4, 0.7, 1, 1);
+      ps.color2 = new BABYLON.Color4(0.6, 0.8, 1, 0.8);
+    } else {
+      ps.color1 = new BABYLON.Color4(1, 0.8, 0.3, 1);
+      ps.color2 = new BABYLON.Color4(0.8, 0.5, 0.1, 0.8);
+    }
+    ps.colorDead = new BABYLON.Color4(0.1, 0.1, 0.1, 0);
+    ps.minEmitPower = 1; ps.maxEmitPower = 3;
+    ps.gravity = new BABYLON.Vector3(0, -3, 0);
+    ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+    ps.targetStopDuration = 0.05;
+    ps.disposeOnStop = true;
+    ps.start();
+  }
+
+  function spawnFireExplosion(pos) {
+    const ps = new BABYLON.ParticleSystem("fire", 40, scene);
+    ps.createSphereEmitter(2);
+    ps.emitter = pos;
+    ps.minSize = 0.2; ps.maxSize = 0.5;
+    ps.minLifeTime = 0.2; ps.maxLifeTime = 0.5;
+    ps.emitRate = 200;
+    ps.color1 = new BABYLON.Color4(1, 0.5, 0, 1);
+    ps.color2 = new BABYLON.Color4(1, 0.2, 0, 0.8);
+    ps.colorDead = new BABYLON.Color4(0.2, 0, 0, 0);
+    ps.minEmitPower = 2; ps.maxEmitPower = 6;
+    ps.gravity = new BABYLON.Vector3(0, 2, 0);
+    ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;
+    ps.targetStopDuration = 0.1;
+    ps.disposeOnStop = true;
+    ps.start();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  TORCH FLICKER
+  // ═══════════════════════════════════════════════════════════════
+  function updateTorches(dt) {
+    for (const light of torchLights) {
+      light.intensity = 0.5 + Math.random() * 0.25;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  GAME LIFECYCLE
+  // ═══════════════════════════════════════════════════════════════
+  async function requestPermissions() {
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      try {
+        const result = await DeviceOrientationEvent.requestPermission();
+        if (result !== 'granted') console.warn('Gyro permission denied');
+      } catch (e) {
+        console.warn('Gyro permission error:', e);
+      }
+    }
+    if (navigator.wakeLock) {
+      try { await navigator.wakeLock.request('screen'); } catch (e) {}
+    }
+  }
+
+  function init() {
+    const canvas = document.getElementById('renderCanvas');
+    engine = new BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: false,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+      doNotHandleContextLost: true,
+    });
+
+    // Reduce resolution on mobile
+    if (window.devicePixelRatio > 1) {
+      engine.setHardwareScalingLevel(2);
+    }
+
+    scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.08, 0.04, 0.02, 1);
+    scene.skipPointerMovePicking = true;
+    scene.autoClear = false;
+    scene.autoClearDepthAndStencil = true;
+    scene.blockMaterialDirtyMechanism = true;
+
+    // ── VR Camera at tower top ──
+    camera = new BABYLON.VRDeviceOrientationFreeCamera("vrCam",
+      new BABYLON.Vector3(0, CONFIG.CAMERA_HEIGHT, 0), scene);
+    camera.interaxialDistance = 0.064;
+    camera.keysUp = []; camera.keysDown = [];
+    camera.keysLeft = []; camera.keysRight = [];
+    camera.attachControl(canvas, true);
+    camera.minZ = 0.1;
+    camera.maxZ = 200;
+
+    // Build everything
+    scene.blockMaterialDirtyMechanism = true;
+    createEnvironment(scene);
+    initEnemyTemplates(scene);
+    createReticle(scene);
+    createHUD(scene);
+    createAnnouncement(scene);
+
+    // Glow layer (subtle)
+    glowLayer = new BABYLON.GlowLayer("glow", scene, {
+      mainTextureSamples: 1,
+      mainTextureFixedSize: 128,
+      blurKernelSize: 32,
+    });
+    glowLayer.intensity = 0.4;
+
+    scene.blockMaterialDirtyMechanism = false;
+
+    // ── Game loop ──
+    scene.registerBeforeRender(() => {
+      const dt = Math.min(engine.getDeltaTime() / 1000, 0.05); // cap at 50ms
+      STATE.dt = dt;
+
+      if (STATE.phase === 'PLAYING' || STATE.phase === 'WAVE_BREAK') {
+        updateGaze(dt);
+        updateArrows(dt);
+        updateEnemies(dt);
+        updateWaves(dt);
+        updatePowerUps(dt);
+        updateCombo(dt);
+
+        // Announcement fade
+        if (STATE.announcementTimer > 0) {
+          STATE.announcementTimer -= dt;
+          if (STATE.announcementTimer <= 0 && announcePlane) {
+            announcePlane.material.alpha = 0;
+          } else if (announcePlane && STATE.announcementTimer < 0.5) {
+            announcePlane.material.alpha = STATE.announcementTimer / 0.5;
+          }
+        }
+
+        // Tower damage flash decay
+        if (STATE.towerDamageFlash > 0) {
+          STATE.towerDamageFlash -= dt * 3;
+        }
+
+        updateHUD();
+      }
+
+      updateTorches(dt);
+    });
+
+    // ── Render loop ──
+    engine.runRenderLoop(() => scene.render());
+
+    window.addEventListener('resize', () => engine.resize());
+
+    // Loading bar animation
+    const fillEl = document.getElementById('loadFill');
+    if (fillEl) {
+      fillEl.style.width = '100%';
+    }
+  }
+
+  function startGame() {
+    // Reset state
+    STATE.phase = 'WAVE_BREAK';
+    STATE.wave = 0;
+    STATE.towerHP = CONFIG.TOWER_MAX_HP;
+    STATE.score = 0;
+    STATE.combo = 0;
+    STATE.maxCombo = 0;
+    STATE.comboTimer = 0;
+    STATE.enemiesKilled = 0;
+    STATE.gazeTarget = null;
+    STATE.gazeCharge = 0;
+    STATE.activePowerUp = null;
+    STATE.powerUpTimer = 0;
+    STATE.waveQueue = [];
+    STATE.spawnTimer = 0;
+    STATE.waveBreakTimer = 3;
+    STATE.powerUpSpawnTimer = CONFIG.POWERUP_INTERVAL;
+    STATE.announcementTimer = 0;
+    STATE.towerDamageFlash = 0;
+
+    // Clean up any leftover enemies/arrows/power-ups
+    STATE.enemies.forEach(e => {
+      e.mesh.getChildMeshes().forEach(m => m.dispose());
+      e.mesh.dispose();
+    });
+    STATE.enemies = [];
+    STATE.arrows.forEach(a => {
+      a.mesh.getChildMeshes().forEach(m => m.dispose());
+      a.mesh.dispose();
+    });
+    STATE.arrows = [];
+    STATE.powerUps.forEach(p => p.mesh.dispose());
+    STATE.powerUps = [];
+
+    // Hide screens
+    document.getElementById('overlay').style.display = 'flex';
+    document.getElementById('startScreen').style.display = 'none';
+    document.getElementById('gameOverScreen').style.display = 'none';
+    document.getElementById('overlay').style.display = 'none';
+
+    showAnnouncement('DEFEND THE TOWER', 3, false);
+    playSound('waveHorn');
+  }
+
+  function gameOver() {
+    STATE.phase = 'GAME_OVER';
+
+    // Update high score
+    if (STATE.score > STATE.highScore) {
+      STATE.highScore = STATE.score;
+      localStorage.setItem('towerDefVR_hs', STATE.highScore.toString());
+    }
+
+    // Show game over screen
+    const statsEl = document.getElementById('statsText');
+    statsEl.innerHTML =
+      'Waves Survived: <span>' + toRoman(STATE.wave) + '</span><br>' +
+      'Enemies Slain: <span>' + STATE.enemiesKilled + '</span><br>' +
+      'Final Score: <span>' + STATE.score + '</span><br>' +
+      'Best Combo: <span>x' + STATE.maxCombo + '</span><br>' +
+      'High Score: <span>' + STATE.highScore + '</span>';
+
+    document.getElementById('overlay').style.display = 'flex';
+    document.getElementById('gameOverScreen').style.display = 'block';
+  }
+
+  // ── Boot ──
+  document.getElementById('startBtn').addEventListener('click', async () => {
+    await requestPermissions();
+    initAudio();
+    if (!engine) init();
+    startGame();
+  });
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    startGame();
+  });
+
+  // Pre-init engine on page load
+  window.addEventListener('DOMContentLoaded', () => {
+    init();
+  });
+
+})();
+  </script>
+</body>
+</html>
