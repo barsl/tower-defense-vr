@@ -1668,10 +1668,7 @@
       doNotHandleContextLost: true,
     });
 
-    // iPhone 15 Pro handles full res fine; only scale on older devices
-    if (window.devicePixelRatio > 2) {
-      engine.setHardwareScalingLevel(window.devicePixelRatio * 0.75);
-    }
+    // Full native resolution — no downscaling
 
     scene = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.08, 0.04, 0.02, 1);
