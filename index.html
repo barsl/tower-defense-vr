@@ -608,7 +608,7 @@
     // ── Ground ──
     const ground = BABYLON.MeshBuilder.CreateGround("ground", {width:200, height:200, subdivisions:1}, sc);
     const groundMat = new BABYLON.StandardMaterial("groundMat", sc);
-    groundMat.diffuseColor = new BABYLON.Color3(0.28, 0.42, 0.15);
+    groundMat.diffuseColor = new BABYLON.Color3(0.12, 0.18, 0.08);  // darker grass for night
     groundMat.specularColor = BABYLON.Color3.Black();
     ground.material = groundMat;
     ground.isPickable = false;
@@ -638,7 +638,7 @@
         pathArray: [leftPts, rightPts], sideOrientation: BABYLON.Mesh.DOUBLESIDE
       }, sc);
       const dirtMat = new BABYLON.StandardMaterial("dirt"+pi, sc);
-      dirtMat.diffuseColor = new BABYLON.Color3(0.52, 0.42, 0.3);
+      dirtMat.diffuseColor = new BABYLON.Color3(0.25, 0.2, 0.14);  // dark dirt for night
       dirtMat.specularColor = BABYLON.Color3.Black();
       ribbon.material = dirtMat;
       ribbon.isPickable = false;
@@ -646,23 +646,138 @@
       dirtMat.freeze();
     });
 
-    // ── Sky sphere — sunset gradient ──
-    const sky = BABYLON.MeshBuilder.CreateSphere("sky", {diameter:300, segments:16, sideOrientation:BABYLON.Mesh.BACKSIDE}, sc);
+    // ── Sky sphere — realistic universe starfield ──
+    const sky = BABYLON.MeshBuilder.CreateSphere("sky", {diameter:300, segments:24, sideOrientation:BABYLON.Mesh.BACKSIDE}, sc);
     const skyMat = new BABYLON.StandardMaterial("skyMat", sc);
     skyMat.disableLighting = true;
     skyMat.backFaceCulling = false;
-    // Gradient via emissive texture
-    const skyTex = new BABYLON.DynamicTexture("skyTex", {width:4, height:256}, sc);
+
+    const SKY_W = 2048, SKY_H = 1024;
+    const skyTex = new BABYLON.DynamicTexture("skyTex", {width:SKY_W, height:SKY_H}, sc, false);
     const sctx = skyTex.getContext();
-    const grad = sctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, '#1a0a2e');    // zenith — deep purple
-    grad.addColorStop(0.3, '#2d1b4e'); // upper — purple
-    grad.addColorStop(0.55, '#cc5522'); // mid — orange
-    grad.addColorStop(0.75, '#e88833'); // lower — warm orange
-    grad.addColorStop(0.9, '#ffaa44');  // horizon — gold
-    grad.addColorStop(1, '#ffcc66');
+
+    // Deep space gradient — dark zenith, warm glow at horizon
+    const grad = sctx.createLinearGradient(0, 0, 0, SKY_H);
+    grad.addColorStop(0,    '#020208');  // zenith — near black
+    grad.addColorStop(0.15, '#060614');  // deep blue-black
+    grad.addColorStop(0.45, '#0a0a1e');  // dark blue
+    grad.addColorStop(0.7,  '#0e0814');  // transition
+    grad.addColorStop(0.82, '#1a0c10');  // warm horizon start
+    grad.addColorStop(0.92, '#2a1208');  // warm amber glow
+    grad.addColorStop(1,    '#1a0a04');  // ground line
     sctx.fillStyle = grad;
-    sctx.fillRect(0, 0, 4, 256);
+    sctx.fillRect(0, 0, SKY_W, SKY_H);
+
+    // Milky Way band — wide semi-transparent band across the sky at an angle
+    sctx.save();
+    sctx.translate(SKY_W / 2, SKY_H * 0.35);
+    sctx.rotate(-0.2);
+    const mwGrad = sctx.createLinearGradient(0, -80, 0, 80);
+    mwGrad.addColorStop(0, 'rgba(60, 50, 80, 0)');
+    mwGrad.addColorStop(0.3, 'rgba(80, 70, 100, 0.06)');
+    mwGrad.addColorStop(0.5, 'rgba(100, 90, 120, 0.09)');
+    mwGrad.addColorStop(0.7, 'rgba(80, 70, 100, 0.06)');
+    mwGrad.addColorStop(1, 'rgba(60, 50, 80, 0)');
+    sctx.fillStyle = mwGrad;
+    sctx.fillRect(-SKY_W, -80, SKY_W * 2, 160);
+    // Dense star cluster in the milky way core
+    for (let i = 0; i < 1500; i++) {
+      const mx = (Math.random() - 0.5) * SKY_W * 1.5;
+      const my = (Math.random() - 0.5) * 100 * (1 - Math.abs(mx) / (SKY_W * 0.8));
+      const mb = 0.15 + Math.random() * 0.35;
+      sctx.fillStyle = `rgba(200,190,220,${mb})`;
+      sctx.fillRect(mx, my, 1, 1);
+    }
+    sctx.restore();
+
+    // Nebula wisps — soft colored glows
+    const nebulae = [
+      {x:400, y:200, r:120, color:'40,20,60'},
+      {x:1500, y:300, r:90, color:'20,30,50'},
+      {x:900, y:150, r:150, color:'50,15,40'},
+      {x:1800, y:100, r:80, color:'15,25,55'},
+    ];
+    for (const neb of nebulae) {
+      const ng = sctx.createRadialGradient(neb.x, neb.y, 0, neb.x, neb.y, neb.r);
+      ng.addColorStop(0, `rgba(${neb.color},0.04)`);
+      ng.addColorStop(0.5, `rgba(${neb.color},0.025)`);
+      ng.addColorStop(1, `rgba(${neb.color},0)`);
+      sctx.fillStyle = ng;
+      sctx.fillRect(neb.x - neb.r, neb.y - neb.r, neb.r * 2, neb.r * 2);
+    }
+
+    // Stars — three tiers: dim (tiny), medium, bright (large with glow)
+    // Seeded pseudo-random for consistency
+    let seed = 42;
+    function srand() { seed = (seed * 16807 + 0) % 2147483647; return seed / 2147483647; }
+
+    // Tier 1: ~2500 dim tiny stars (upper 80% of sky)
+    for (let i = 0; i < 2500; i++) {
+      const sx = srand() * SKY_W;
+      const sy = srand() * SKY_H * 0.82;
+      const sb = 0.2 + srand() * 0.4;
+      sctx.fillStyle = `rgba(220,220,235,${sb})`;
+      sctx.fillRect(sx, sy, 1, 1);
+    }
+
+    // Tier 2: ~400 medium stars with slight color variation
+    for (let i = 0; i < 400; i++) {
+      const sx = srand() * SKY_W;
+      const sy = srand() * SKY_H * 0.78;
+      const sb = 0.5 + srand() * 0.4;
+      const sr = Math.round(180 + srand() * 75);
+      const sg = Math.round(180 + srand() * 60);
+      const sbl = Math.round(190 + srand() * 65);
+      sctx.fillStyle = `rgba(${sr},${sg},${sbl},${sb})`;
+      sctx.beginPath();
+      sctx.arc(sx, sy, 1 + srand() * 0.5, 0, Math.PI * 2);
+      sctx.fill();
+    }
+
+    // Tier 3: ~60 bright stars with glow halos
+    for (let i = 0; i < 60; i++) {
+      const sx = srand() * SKY_W;
+      const sy = srand() * SKY_H * 0.7;
+      const starR = 1.5 + srand() * 1.5;
+      // Warm or cool tint
+      const warm = srand() > 0.5;
+      const cr = warm ? '255,220,180' : '180,200,255';
+
+      // Outer glow
+      const glow = sctx.createRadialGradient(sx, sy, 0, sx, sy, starR * 5);
+      glow.addColorStop(0, `rgba(${cr},0.15)`);
+      glow.addColorStop(0.4, `rgba(${cr},0.04)`);
+      glow.addColorStop(1, `rgba(${cr},0)`);
+      sctx.fillStyle = glow;
+      sctx.fillRect(sx - starR * 5, sy - starR * 5, starR * 10, starR * 10);
+
+      // Core
+      sctx.fillStyle = `rgba(255,255,255,0.95)`;
+      sctx.beginPath();
+      sctx.arc(sx, sy, starR, 0, Math.PI * 2);
+      sctx.fill();
+    }
+
+    // Moon — crescent in upper sky
+    const moonX = SKY_W * 0.75, moonY = SKY_H * 0.18, moonR = 25;
+    // Moon glow
+    const moonGlow = sctx.createRadialGradient(moonX, moonY, moonR * 0.5, moonX, moonY, moonR * 4);
+    moonGlow.addColorStop(0, 'rgba(200,200,220,0.08)');
+    moonGlow.addColorStop(0.5, 'rgba(150,160,200,0.03)');
+    moonGlow.addColorStop(1, 'rgba(100,110,150,0)');
+    sctx.fillStyle = moonGlow;
+    sctx.fillRect(moonX - moonR * 4, moonY - moonR * 4, moonR * 8, moonR * 8);
+    // Moon disc
+    sctx.fillStyle = 'rgba(220, 220, 230, 0.85)';
+    sctx.beginPath();
+    sctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+    sctx.fill();
+    // Crescent shadow (offset circle to create crescent)
+    sctx.fillStyle = '#060614';
+    sctx.beginPath();
+    sctx.arc(moonX + moonR * 0.6, moonY - moonR * 0.15, moonR * 0.85, 0, Math.PI * 2);
+    sctx.fill();
+
     skyTex.update();
     skyMat.emissiveTexture = skyTex;
     skyMat.diffuseColor = BABYLON.Color3.Black();
@@ -671,22 +786,22 @@
     sky.freezeWorldMatrix();
     skyMat.freeze();
 
-    // ── Fog ──
+    // ── Fog — night mist, subtle dark blue ──
     sc.fogMode = BABYLON.Scene.FOGMODE_EXP2;
-    sc.fogDensity = CONFIG.FOG_DENSITY;
-    sc.fogColor = new BABYLON.Color3(0.55, 0.35, 0.2);
+    sc.fogDensity = 0.010;
+    sc.fogColor = new BABYLON.Color3(0.06, 0.05, 0.08);
 
-    // ── Lighting ──
-    // Hemisphere — warm from above, cool from below
+    // ── Lighting — moonlit night + warm torchlight ──
+    // Hemisphere — cool moonlight from above, dark below
     const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), sc);
-    hemi.diffuse = new BABYLON.Color3(0.85, 0.7, 0.5);
-    hemi.groundColor = new BABYLON.Color3(0.15, 0.18, 0.25);
-    hemi.intensity = 0.7;
+    hemi.diffuse = new BABYLON.Color3(0.25, 0.28, 0.4);
+    hemi.groundColor = new BABYLON.Color3(0.06, 0.06, 0.1);
+    hemi.intensity = 0.65;
 
-    // Directional — low sun
-    const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.5, -0.3, 0.7), sc);
-    sun.diffuse = new BABYLON.Color3(1.0, 0.75, 0.45);
-    sun.intensity = 0.5;
+    // Directional — pale moonlight from above-right
+    const moon = new BABYLON.DirectionalLight("moon", new BABYLON.Vector3(-0.3, -0.7, 0.5), sc);
+    moon.diffuse = new BABYLON.Color3(0.5, 0.52, 0.65);
+    moon.intensity = 0.3;
 
     // ── Tower ──
     const towerData = buildTower(sc);
@@ -695,8 +810,8 @@
     towerData.torchPositions.forEach((pos, i) => {
       const light = new BABYLON.PointLight("torch"+i, pos, sc);
       light.diffuse = new BABYLON.Color3(1.0, 0.65, 0.25);
-      light.intensity = 0.6;
-      light.range = 12;
+      light.intensity = 1.0;   // brighter torches for night scene
+      light.range = 18;
       torchLights.push(light);
 
       // Torch flame particles
@@ -1671,7 +1786,7 @@
     // Full native resolution — no downscaling
 
     scene = new BABYLON.Scene(engine);
-    scene.clearColor = new BABYLON.Color4(0.08, 0.04, 0.02, 1);
+    scene.clearColor = new BABYLON.Color4(0.02, 0.02, 0.04, 1);
     scene.skipPointerMovePicking = true;
     scene.autoClear = false;
     scene.autoClearDepthAndStencil = true;
